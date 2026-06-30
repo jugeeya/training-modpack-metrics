@@ -1,0 +1,28 @@
+name: Inspect Firebase (read-only)
+
+# Manual only. Reports what is currently stored under the events path without
+# writing or deleting anything — useful for verifying state after a drain.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Inspect Firebase contents
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+        # Running the script puts scripts/ on sys.path, so `import aggregate` resolves.
+        run: python scripts/inspect_firebase.py
