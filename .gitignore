@@ -1,0 +1,11 @@
+# Manifest of records to delete from Firebase; never committed.
+.consumed_paths.json
+
+# Local Firebase credentials — keep these out of the repo, use Actions secrets.
+serviceAccountKey.json
+*.serviceAccountKey.json
+
+__pycache__/
+*.pyc
+.venv/
+venv/

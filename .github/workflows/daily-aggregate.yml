@@ -1,0 +1,60 @@
+name: Daily Metrics Aggregation
+
+on:
+  schedule:
+    # Daily at 06:00 UTC.
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+# Allow the job to commit the aggregated data back to the repo.
+permissions:
+  contents: write
+
+# Never run two aggregations at once — concurrent deletes from Firebase would race.
+concurrency:
+  group: daily-aggregate
+  cancel-in-progress: false
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Aggregate Firebase data into data/daily_metrics.json
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+        run: python scripts/aggregate.py
+
+      - name: Commit and push aggregated data
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/daily_metrics.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update daily metrics ($(date -u +%Y-%m-%d))"
+            git push
+            echo "Pushed updated metrics."
+          fi
+
+      # Only reached if every step above (including the push) succeeded, so a
+      # failed push can never delete data that was not safely persisted.
+      - name: Delete consumed records from Firebase
+        if: success()
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+        run: python scripts/clear_consumed.py
