@@ -52,6 +52,11 @@ The output `data/daily_metrics.json` is an array, sorted by date ascending:
 
 ### Why it is safe and idempotent
 
+* **Chunked reads.** The database is never pulled down in one request. A cheap
+  `shallow=True` read lists the top-level nodes under `SMASH_OPEN/device`, then
+  each node's sub-tree is read and processed one at a time, so peak memory and
+  per-request size stay bounded to a single node no matter how large the backlog
+  is. (Every node is still visited each run — see the next point.)
 * **Only complete past days are finalized.** A day is aggregated only once
   it is strictly in the past (UTC), so all of its events are present and its
   distinct counts are exact. Today's still-arriving events are left in Firebase

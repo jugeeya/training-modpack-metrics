@@ -23,6 +23,12 @@ Each leaf object has the fields: ``device_id``, ``event_name``, ``event_time``,
 
 Design notes
 ------------
+* **Chunked reads.** The database is never downloaded in a single ``.get()``.
+  A cheap ``shallow=True`` read enumerates the top-level nodes under
+  ``SMASH_OPEN/device``, then each node's sub-tree is read and processed one at
+  a time, so peak memory and per-request size stay bounded to a single node
+  rather than the whole tree. Every node is still visited each run (a full
+  pass), which is what keeps the past-day finalization below exact.
 * This script never deletes from Firebase. It only *reads* and writes the
   aggregated JSON plus a local ``.consumed_paths.json`` manifest. The workflow
   runs ``clear_consumed.py`` to delete the consumed records **after** the
@@ -136,12 +142,42 @@ def load_existing_metrics() -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def top_level_keys(root_ref) -> list[str]:
+    """Cheaply enumerate the immediate child keys of the events root.
+
+    A ``shallow=True`` read returns only the keys (mapped to ``True``) without
+    any of their values, so this is a single small request regardless of how
+    much data lives underneath. Returns ``[]`` when the path is empty.
+    """
+    shallow = root_ref.get(shallow=True)
+    if not shallow:
+        return []
+    if isinstance(shallow, list):
+        # Sequential integer keys come back as a list (with possible holes).
+        return [str(i) for i, present in enumerate(shallow) if present is not None]
+    return list(shallow.keys())
+
+
+def iter_chunked_events(root_ref):
+    """Yield ``(relative_path, event)`` for every event, one top-level node at a
+    time, so the whole tree is never held in memory at once."""
+    keys = top_level_keys(root_ref)
+    print(
+        f"Found {len(keys)} top-level node(s) under {FIREBASE_EVENTS_PATH}; "
+        "reading them one at a time."
+    )
+    for index, key in enumerate(keys, start=1):
+        subtree = root_ref.child(key).get()
+        if subtree is None:
+            continue
+        chunk = list(walk_events(subtree, key))
+        print(f"  [{index}/{len(keys)}] node '{key}': {len(chunk)} event(s)")
+        yield from chunk
+
+
 def main() -> None:
     init_firebase()
-
-    raw = db.reference(FIREBASE_EVENTS_PATH).get()
-    events = list(walk_events(raw, "")) if raw else []
-    print(f"Read {len(events)} event(s) from {FIREBASE_EVENTS_PATH}.")
+    root_ref = db.reference(FIREBASE_EVENTS_PATH)
 
     today = datetime.now(timezone.utc).date().isoformat()
 
@@ -152,8 +188,10 @@ def main() -> None:
     # device_ids / session_ids are sets so the counts are distinct.
     buckets: dict[str, dict] = {}
     consumed_paths: list[str] = []
+    total_events = 0
 
-    for rel_path, event in events:
+    for rel_path, event in iter_chunked_events(root_ref):
+        total_events += 1
         day = event_day(event)
         if day is None:
             continue
@@ -172,6 +210,8 @@ def main() -> None:
         bucket["session_ids"].add(event.get("session_id"))
         bucket["num_events"] += 1
         consumed_paths.append(rel_path)
+
+    print(f"Read {total_events} event(s) in total.")
 
     new_rows = [
         {
