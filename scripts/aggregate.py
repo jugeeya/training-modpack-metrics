@@ -14,8 +14,9 @@ SQL it replaces was::
     GROUP BY date
     ORDER BY date
 
-Events live in the Realtime Database under ``SMASH_OPEN/device`` in a nested
-structure (the original tooling flattened it with ``jq -c '.SMASH_OPEN.device[][][]'``).
+Events live in the Realtime Database under ``event/SMASH_OPEN/device`` in a
+nested structure (the original tooling exported ``/event/`` and flattened it
+with ``jq -c '.SMASH_OPEN.device[][][]'``).
 Each leaf object has the fields: ``device_id``, ``event_name``, ``event_time``,
 ``menu_settings``, ``session_id``, ``smash_version``, ``mod_version``, ``user_id``.
 
@@ -56,8 +57,13 @@ from pathlib import Path
 import firebase_admin
 from firebase_admin import credentials, db
 
-# ``SMASH_OPEN/device`` is the root of the nested event tree.
-FIREBASE_EVENTS_PATH = "SMASH_OPEN/device"
+# Root of the nested event tree. The original Rust tool noted that its export
+# was taken "relative to /event/" and then indexed ``.SMASH_OPEN.device``, so the
+# full database path is ``event/SMASH_OPEN/device``. Override with the
+# FIREBASE_EVENTS_PATH env var if your database stores it elsewhere.
+FIREBASE_EVENTS_PATH = os.environ.get(
+    "FIREBASE_EVENTS_PATH", "event/SMASH_OPEN/device"
+)
 
 # Reject anything before 2021-09-01 (matches the original Rust WHERE clause).
 MIN_EVENT_TIME_MS = 1_630_454_400_000
@@ -158,6 +164,25 @@ def top_level_keys(root_ref) -> list[str]:
     return list(shallow.keys())
 
 
+def print_database_outline() -> None:
+    """Print the database's top-level keys to help locate the events path.
+
+    Called when the configured path turns up nothing, so the run logs show
+    where the data actually lives (e.g. ``event``) instead of failing silently.
+    """
+    try:
+        root = db.reference("/").get(shallow=True)
+    except Exception as exc:  # diagnostics only; never fail the run on this
+        print(f"Could not read database root for diagnostics: {exc}")
+        return
+    keys = list(root.keys()) if isinstance(root, dict) else root
+    print(
+        f"No data found at '{FIREBASE_EVENTS_PATH}'. Database top-level keys are: "
+        f"{keys}. If the events live elsewhere, set the FIREBASE_EVENTS_PATH "
+        "secret/variable to the correct path."
+    )
+
+
 def iter_chunked_events(root_ref):
     """Yield ``(relative_path, event)`` for every event, one top-level node at a
     time, so the whole tree is never held in memory at once."""
@@ -166,6 +191,8 @@ def iter_chunked_events(root_ref):
         f"Found {len(keys)} top-level node(s) under {FIREBASE_EVENTS_PATH}; "
         "reading them one at a time."
     )
+    if not keys:
+        print_database_outline()
     for index, key in enumerate(keys, start=1):
         subtree = root_ref.child(key).get()
         if subtree is None:

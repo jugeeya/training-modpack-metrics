@@ -19,7 +19,10 @@ from pathlib import Path
 import firebase_admin
 from firebase_admin import credentials, db
 
-FIREBASE_EVENTS_PATH = "SMASH_OPEN/device"
+# Must match aggregate.py — the consumed paths are relative to this root.
+FIREBASE_EVENTS_PATH = os.environ.get(
+    "FIREBASE_EVENTS_PATH", "event/SMASH_OPEN/device"
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONSUMED_PATHS_FILE = REPO_ROOT / ".consumed_paths.json"

@@ -27,10 +27,12 @@ training-modpack-metrics/
 
 ## How aggregation works
 
-Raw events live in the Realtime Database under `SMASH_OPEN/device` in a nested
-structure. Each leaf object has the fields `device_id`, `event_name`,
+Raw events live in the Realtime Database under `event/SMASH_OPEN/device` in a
+nested structure. Each leaf object has the fields `device_id`, `event_name`,
 `event_time` (epoch **milliseconds**), `menu_settings`, `session_id`,
-`smash_version`, `mod_version`, `user_id`.
+`smash_version`, `mod_version`, `user_id`. If your database stores them under a
+different path, set the `FIREBASE_EVENTS_PATH` secret/variable to override it
+(both scripts read the same value).
 
 `aggregate.py` reproduces the original SQL:
 
@@ -53,7 +55,7 @@ The output `data/daily_metrics.json` is an array, sorted by date ascending:
 ### Why it is safe and idempotent
 
 * **Chunked reads.** The database is never pulled down in one request. A cheap
-  `shallow=True` read lists the top-level nodes under `SMASH_OPEN/device`, then
+  `shallow=True` read lists the top-level nodes under `event/SMASH_OPEN/device`, then
   each node's sub-tree is read and processed one at a time, so peak memory and
   per-request size stay bounded to a single node no matter how large the backlog
   is. (Every node is still visited each run — see the next point.)
@@ -81,7 +83,7 @@ Settings → Service accounts → **Generate new private key**. This downloads a
 JSON file. You also need your Realtime Database URL (e.g.
 `https://<project>-default-rtdb.firebaseio.com`).
 
-The service account needs read + write access to `SMASH_OPEN/device` (write is
+The service account needs read + write access to `event/SMASH_OPEN/device` (write is
 required for the delete step).
 
 ### 2. GitHub Actions secrets
