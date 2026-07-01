@@ -44,6 +44,11 @@ CONSUMED_PATHS_FILE = REPO_ROOT / ".consumed_paths.json"
 # Firebase rejects very large multi-path updates; delete in chunks.
 CHUNK_SIZE = 500
 
+# Child subtrees to delete per request when purging a whole path. Deleting many
+# at once is far faster than one-at-a-time; the size is halved when a request
+# exceeds Firebase's write-size limit, so it self-tunes to the data.
+PURGE_BATCH = 256
+
 
 def init_firebase() -> None:
     service_account = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
@@ -76,36 +81,49 @@ def shallow_child_keys(ref) -> list[str]:
     return list(shallow.keys())
 
 
-def purge_node(ref, label: str) -> int:
-    """Delete everything under ``ref``, subdividing when a single delete is too
-    large. Tries to delete the node wholesale; if Firebase rejects it because the
-    subtree exceeds the per-request write-size limit, it recurses into the node's
-    children (enumerated with a cheap shallow read) and deletes them one level
-    deeper. Returns the number of subtrees actually deleted."""
-    try:
-        ref.delete()
-        return 1
-    except exceptions.InvalidArgumentError:
-        children = shallow_child_keys(ref)
-        if not children:
-            raise  # too large but nothing to subdivide — surface the error
-        deleted = 0
-        for key in children:
-            deleted += purge_node(ref.child(key), f"{label}/{key}")
-        return deleted
+def delete_children(ref, keys: list[str], label: str) -> int:
+    """Delete the given child keys under ``ref`` in batches.
+
+    Deletes ``PURGE_BATCH`` subtrees per multi-path update. When a request is
+    rejected for exceeding Firebase's write-size limit, the batch is halved and
+    retried; if even a single child subtree is too large on its own, it recurses
+    into that child's children (enumerated with a cheap shallow read). This keeps
+    every request bounded while doing far fewer round-trips than one-at-a-time.
+    """
+    deleted = 0
+    index = 0
+    batch = PURGE_BATCH
+    while index < len(keys):
+        chunk = keys[index : index + batch]
+        try:
+            ref.update({key: None for key in chunk})
+        except exceptions.InvalidArgumentError:
+            if len(chunk) > 1:
+                batch = max(1, batch // 2)
+                continue
+            # One child subtree exceeds the limit by itself — recurse into it.
+            child = ref.child(chunk[0])
+            grandchildren = shallow_child_keys(child)
+            if not grandchildren:
+                raise  # a single leaf over the limit — nothing to subdivide
+            deleted += delete_children(child, grandchildren, f"{label}/{chunk[0]}")
+            index += 1
+            batch = PURGE_BATCH
+            continue
+        deleted += len(chunk)
+        index += len(chunk)
+    return deleted
 
 
 def purge(path: str) -> None:
-    """Wipe everything under ``path``. Never deletes the whole path in one
-    request; enumerates the top-level children first and deletes each subtree
-    (subdividing further only as needed)."""
+    """Wipe everything under ``path`` using bounded batched deletes."""
     ref = db.reference(path)
-    children = shallow_child_keys(ref)
-    if not children:
+    keys = shallow_child_keys(ref)
+    if not keys:
         print(f"Purge: '{path}' is already empty.")
         return
-    deleted = sum(purge_node(ref.child(key), f"{path}/{key}") for key in children)
-    print(f"Purge: deleted {deleted} subtree(s) under '{path}'.")
+    deleted = delete_children(ref, keys, path)
+    print(f"Purge: deleted {deleted} node(s) under '{path}'.")
 
 
 def main() -> None:
