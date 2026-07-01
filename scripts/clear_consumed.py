@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 import firebase_admin
-from firebase_admin import credentials, db
+from firebase_admin import credentials, db, exceptions
 
 # Must match aggregate.py — the consumed paths are relative to this root.
 FIREBASE_EVENTS_PATH = os.environ.get(
@@ -37,10 +37,6 @@ PURGE_PATHS = [
     for p in os.environ.get("FIREBASE_PURGE_PATHS", "event/MENU_OPEN").split(",")
     if p.strip()
 ]
-
-# How many levels to descend (via shallow reads) before deleting whole subtrees.
-# Keeps each individual delete bounded to roughly one device's worth of data.
-PURGE_MAX_LEVELS = 2
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONSUMED_PATHS_FILE = REPO_ROOT / ".consumed_paths.json"
@@ -80,29 +76,36 @@ def shallow_child_keys(ref) -> list[str]:
     return list(shallow.keys())
 
 
-def collect_purge_keys(ref, prefix: str, levels: int) -> list[str]:
-    """Relative paths to delete under a purge root, descending up to ``levels``
-    using only shallow reads (values are never fetched)."""
-    keys = shallow_child_keys(ref)
-    if not keys:
-        return []
-    if levels <= 1:
-        return [prefix + key for key in keys]
-    collected: list[str] = []
-    for key in keys:
-        sub = collect_purge_keys(ref.child(key), f"{prefix}{key}/", levels - 1)
-        collected.extend(sub if sub else [prefix + key])
-    return collected
+def purge_node(ref, label: str) -> int:
+    """Delete everything under ``ref``, subdividing when a single delete is too
+    large. Tries to delete the node wholesale; if Firebase rejects it because the
+    subtree exceeds the per-request write-size limit, it recurses into the node's
+    children (enumerated with a cheap shallow read) and deletes them one level
+    deeper. Returns the number of subtrees actually deleted."""
+    try:
+        ref.delete()
+        return 1
+    except exceptions.InvalidArgumentError:
+        children = shallow_child_keys(ref)
+        if not children:
+            raise  # too large but nothing to subdivide — surface the error
+        deleted = 0
+        for key in children:
+            deleted += purge_node(ref.child(key), f"{label}/{key}")
+        return deleted
 
 
 def purge(path: str) -> None:
+    """Wipe everything under ``path``. Never deletes the whole path in one
+    request; enumerates the top-level children first and deletes each subtree
+    (subdividing further only as needed)."""
     ref = db.reference(path)
-    keys = collect_purge_keys(ref, "", PURGE_MAX_LEVELS)
-    if not keys:
+    children = shallow_child_keys(ref)
+    if not children:
         print(f"Purge: '{path}' is already empty.")
         return
-    deleted = delete_in_chunks(ref, keys)
-    print(f"Purge: deleted {deleted} node(s) under '{path}'.")
+    deleted = sum(purge_node(ref.child(key), f"{path}/{key}") for key in children)
+    print(f"Purge: deleted {deleted} subtree(s) under '{path}'.")
 
 
 def main() -> None:
