@@ -70,9 +70,19 @@ The output `data/daily_metrics.json` is an array, sorted by date ascending:
   pushes the JSON first, and only then runs `clear_consumed.py` to delete those
   paths. If the push fails, nothing is deleted and the data is retried next run.
 * **No duplicates.** A date already present in `daily_metrics.json` is never
-  re-finalized, and records for an already-finalized day are left in Firebase
-  rather than corrupting existing counts. Re-running the workflow on the same
-  data is a no-op.
+  re-finalized. Re-running the workflow on the same data is a no-op.
+* **Unusable records are cleaned up, not left to pile up.** Garbage timestamps
+  (unparseable, pre-2021, or implausibly far in the future — mis-set device
+  clocks produce dates like 2052 or 2757) and late arrivals for an
+  already-finalized day are deleted *without* being counted, so they can't
+  accumulate in Firebase. Only today's and near-future events are kept to finish
+  accumulating.
+* **Legacy paths are purged.** After deleting consumed records, `clear_consumed.py`
+  also wipes any paths in `FIREBASE_PURGE_PATHS` (default `event/MENU_OPEN`) —
+  data we no longer read but that still occupies storage. The purge uses only
+  `shallow` reads to enumerate keys (it never downloads the subtree) and deletes
+  in bounded chunks. Set `FIREBASE_PURGE_PATHS` to a comma-separated list to
+  change it, or empty to disable.
 
 ## Setup
 

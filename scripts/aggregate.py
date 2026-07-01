@@ -42,8 +42,12 @@ Design notes
   Firebase for a later run. This keeps distinct counts exact without having to
   persist per-day id sets.
 * The merge is idempotent: a date already present in ``daily_metrics.json`` is
-  never re-finalized or duplicated, and its source records are left untouched in
-  Firebase (so nothing is lost) rather than silently dropped.
+  never re-finalized or duplicated.
+* Unusable records are cleaned up rather than left to accumulate: garbage
+  timestamps (unparseable, pre-2021, or implausibly far in the future — mis-set
+  device clocks produce dates like 2052 or 2757) and late arrivals for a day
+  that was already finalized are queued for deletion *without* being counted.
+  Only today's and near-future events are left in place to keep accumulating.
 """
 
 from __future__ import annotations
@@ -67,6 +71,11 @@ FIREBASE_EVENTS_PATH = os.environ.get(
 
 # Reject anything before 2021-09-01 (matches the original Rust WHERE clause).
 MIN_EVENT_TIME_MS = 1_630_454_400_000
+
+# Events dated more than this far in the future are treated as garbage from a
+# mis-set device clock (we have observed dates in 2052, 2060, even 2757). A
+# couple of days of slack covers legitimate clock skew across time zones.
+FUTURE_TOLERANCE_MS = 2 * 24 * 60 * 60 * 1000
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 METRICS_FILE = REPO_ROOT / "data" / "daily_metrics.json"
@@ -135,6 +144,33 @@ def event_day(event) -> str | None:
     if ts_ms < MIN_EVENT_TIME_MS:
         return None
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date().isoformat()
+
+
+def classify_event(event, today, now_ms, finalized_dates):
+    """Decide what to do with one event. Returns ``(action, day)`` where action:
+
+    * ``"finalize"`` — a complete past day not yet in the output: count it and
+      delete the record.
+    * ``"delete"``   — an unusable or already-accounted record: a garbage
+      timestamp (unparseable, pre-2021, or implausibly far in the future), or a
+      late arrival for a day already finalized. Deleted without counting so it
+      cannot accumulate in Firebase.
+    * ``"keep"``     — today's or near-future events, left in Firebase to finish
+      accumulating; they finalize on a later run once the day is complete.
+    """
+    raw = event.get("event_time")
+    try:
+        ts_ms = int(raw)
+    except (TypeError, ValueError):
+        return "delete", None
+    if ts_ms < MIN_EVENT_TIME_MS or ts_ms > now_ms + FUTURE_TOLERANCE_MS:
+        return "delete", None
+    day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date().isoformat()
+    if day >= today:
+        return "keep", day
+    if day in finalized_dates:
+        return "delete", day
+    return "finalize", day
 
 
 def load_existing_metrics() -> list[dict]:
@@ -206,7 +242,9 @@ def main() -> None:
     init_firebase()
     root_ref = db.reference(FIREBASE_EVENTS_PATH)
 
-    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    now_ms = int(now.timestamp() * 1000)
 
     existing = load_existing_metrics()
     existing_dates = {row["date"] for row in existing}
@@ -216,19 +254,17 @@ def main() -> None:
     buckets: dict[str, dict] = {}
     consumed_paths: list[str] = []
     total_events = 0
+    counts = {"finalize": 0, "delete": 0, "keep": 0}
 
     for rel_path, event in iter_chunked_events(root_ref):
         total_events += 1
-        day = event_day(event)
-        if day is None:
+        action, day = classify_event(event, today, now_ms, existing_dates)
+        counts[action] += 1
+        if action == "keep":
             continue
-        # Leave today's (and any future-dated) events in Firebase to accumulate.
-        if day >= today:
-            continue
-        # A day already in the output has been finalized; leave its (late)
-        # records in Firebase rather than corrupting the existing counts or
-        # dropping the data.
-        if day in existing_dates:
+        # Both "finalize" and "delete" records are removed from Firebase.
+        consumed_paths.append(rel_path)
+        if action == "delete":
             continue
         bucket = buckets.setdefault(
             day, {"device_ids": set(), "session_ids": set(), "num_events": 0}
@@ -236,9 +272,12 @@ def main() -> None:
         bucket["device_ids"].add(event.get("device_id"))
         bucket["session_ids"].add(event.get("session_id"))
         bucket["num_events"] += 1
-        consumed_paths.append(rel_path)
 
-    print(f"Read {total_events} event(s) in total.")
+    print(
+        f"Read {total_events} event(s): {counts['finalize']} to finalize, "
+        f"{counts['delete']} unusable/late (will be deleted), "
+        f"{counts['keep']} kept (today/near-future)."
+    )
 
     new_rows = [
         {
