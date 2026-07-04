@@ -40,6 +40,10 @@
         --font-display: "Space Grotesk", "Roboto", system-ui, sans-serif;
       }
       * { box-sizing: border-box; }
+      html {
+        background-color: var(--md-surface);
+        color-scheme: dark;
+      }
       body {
         margin: 0;
         padding: 2rem 1.25rem 3rem;
@@ -48,6 +52,7 @@
         font-family: var(--font);
         -webkit-font-smoothing: antialiased;
         min-height: 100vh;
+        min-height: 100dvh;
       }
       /* Drifting aurora, same as the rest of the site */
       body::before {
