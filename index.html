@@ -4,93 +4,167 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Ultimate Training Modpack — Users and Sessions by Date</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <style>
+      /* Material Design 3 (dark), matching jugeeya.github.io. This tool's card
+         on the hub is violet, so this page adopts the default violet accent. */
       :root {
-        --bg: #0d1117;
-        --panel: #161b22;
-        --border: #30363d;
-        --text: #e6edf3;
-        --muted: #8b949e;
-        --devices: #f85149;
-        --sessions: #58a6ff;
+        --md-primary: #cfbcff;
+        --md-tertiary: #8fd3e8;
+        --md-surface: #141218;
+        --md-surface-container-low: #1d1b20;
+        --md-surface-container: #211f26;
+        --md-surface-container-high: #2b2930;
+        --md-on-surface: #e6e0e9;
+        --md-on-surface-variant: #cac4d0;
+        --md-outline-variant: #49454f;
+        --md-corner-lg: 16px;
+        --md-elev-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+        --accent-violet: #cfbcff;
+        --accent-cyan: #8fd3e8;
+        --accent-pink: #ffb0cd;
+        --accent-amber: #f4c66b;
+
+        /* two chart series — warm vs cool so the lines read apart */
+        --devices: #ffb0cd;
+        --sessions: #8fd3e8;
+
+        --font: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-display: "Space Grotesk", "Roboto", system-ui, sans-serif;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        padding: 2rem 1rem;
-        background: var(--bg);
-        color: var(--text);
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-          Helvetica, Arial, sans-serif;
+        padding: 2rem 1.25rem 3rem;
+        background: var(--md-surface);
+        color: var(--md-on-surface);
+        font-family: var(--font);
+        -webkit-font-smoothing: antialiased;
+        min-height: 100vh;
       }
-      main {
-        max-width: 1100px;
-        margin: 0 auto;
+      /* Drifting aurora, same as the rest of the site */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: -20%;
+        z-index: -1;
+        pointer-events: none;
+        background:
+          radial-gradient(38% 44% at 12% 8%, color-mix(in srgb, var(--accent-violet) 30%, transparent), transparent 62%),
+          radial-gradient(42% 42% at 88% 16%, color-mix(in srgb, var(--accent-cyan) 24%, transparent), transparent 60%),
+          radial-gradient(46% 48% at 78% 88%, color-mix(in srgb, var(--accent-pink) 22%, transparent), transparent 62%),
+          radial-gradient(40% 42% at 20% 92%, color-mix(in srgb, var(--accent-amber) 15%, transparent), transparent 60%);
+        filter: blur(24px) saturate(120%);
+        animation: aurora-drift 26s ease-in-out infinite alternate;
       }
+      @keyframes aurora-drift {
+        0% { transform: translate3d(0, 0, 0) scale(1); }
+        50% { transform: translate3d(0, -2.5%, 0) scale(1.08); }
+        100% { transform: translate3d(1.5%, 1.5%, 0) scale(1.04); }
+      }
+      main { max-width: 1100px; margin: 0 auto; }
+
+      .back-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        color: var(--md-on-surface-variant);
+        text-decoration: none;
+        margin-bottom: 1.5rem;
+        font-size: 0.9rem;
+        transition: color 0.2s ease, transform 0.3s cubic-bezier(0.34, 1.4, 0.5, 1);
+      }
+      .back-link:hover { color: var(--md-primary); transform: translateX(-3px); }
+
       h1 {
-        font-size: 1.4rem;
-        font-weight: 600;
-        margin: 0 0 0.25rem;
+        font-family: var(--font-display);
+        font-size: clamp(1.6rem, 3.5vw, 2.1rem);
+        font-weight: 700;
+        letter-spacing: -0.5px;
+        margin: 0 0 0.3rem;
+        background: linear-gradient(120deg, var(--md-primary) 0%, var(--md-tertiary) 55%, var(--md-primary) 100%);
+        background-size: 200% auto;
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        animation: sheen 8s ease-in-out infinite;
+      }
+      @keyframes sheen {
+        0%, 100% { background-position: 0% center; }
+        50% { background-position: 100% center; }
       }
       p.subtitle {
-        margin: 0 0 1.5rem;
-        color: var(--muted);
-        font-size: 0.9rem;
+        margin: 0 0 1.75rem;
+        color: var(--md-on-surface-variant);
+        font-size: 0.95rem;
       }
-      .panel {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 1.25rem;
+
+      .panel,
+      .stat {
+        background: linear-gradient(158deg,
+          var(--md-surface-container-high) 0%, var(--md-surface-container) 100%);
+        border: 1px solid var(--md-outline-variant);
+        border-radius: var(--md-corner-lg);
+        box-shadow: var(--md-elev-1);
       }
-      .chart-wrap {
-        position: relative;
-        height: 60vh;
-        min-height: 360px;
-      }
-      .stats {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 1rem;
-        margin-bottom: 1.5rem;
-      }
+      .panel { padding: 1.25rem; }
+      .chart-wrap { position: relative; height: 60vh; min-height: 360px; }
+
+      .stats { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; }
       .stat {
         flex: 1 1 160px;
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 12px;
         padding: 1rem 1.25rem;
+        transition: box-shadow 0.3s cubic-bezier(0.2, 0, 0, 1),
+          transform 0.3s cubic-bezier(0.2, 0, 0, 1), border-color 0.3s ease;
+      }
+      .stat:hover {
+        transform: translateY(-4px);
+        border-color: color-mix(in srgb, var(--md-primary) 45%, transparent);
+        box-shadow: var(--md-elev-1), 0 10px 30px -8px color-mix(in srgb, var(--md-primary) 45%, transparent);
       }
       .stat .label {
-        color: var(--muted);
-        font-size: 0.8rem;
+        color: var(--md-on-surface-variant);
+        font-size: 0.78rem;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.06em;
       }
       .stat .value {
-        font-size: 1.6rem;
+        font-family: var(--font-display);
+        font-size: 1.7rem;
         font-weight: 700;
         margin-top: 0.25rem;
       }
+
       #status {
-        color: var(--muted);
+        color: var(--md-on-surface-variant);
         font-size: 0.9rem;
         text-align: center;
         padding: 2rem;
       }
       footer {
         margin-top: 1.5rem;
-        color: var(--muted);
-        font-size: 0.8rem;
+        color: var(--md-on-surface-variant);
+        font-size: 0.82rem;
         text-align: center;
       }
-      a { color: var(--sessions); }
+      a { color: var(--md-primary); }
+
+      @media (prefers-reduced-motion: reduce) {
+        body::before, h1, .stat, .back-link { animation: none; transition: none; }
+      }
     </style>
   </head>
   <body>
     <main>
+      <a class="back-link" href="https://jugeeya.github.io/">&larr; Back to home</a>
+
       <h1>Ultimate Training Modpack — Users and Sessions by Date</h1>
       <p class="subtitle">Daily unique devices and sessions, aggregated from menu-open analytics.</p>
 
@@ -124,7 +198,7 @@
     </main>
 
     <script>
-      const COLORS = { devices: "#f85149", sessions: "#58a6ff" };
+      const COLORS = { devices: "#ffb0cd", sessions: "#8fd3e8" };
 
       async function load() {
         const status = document.getElementById("status");
@@ -162,7 +236,7 @@
       function renderChart(rows) {
         const labels = rows.map((r) => r.date);
         const gridColor = "rgba(255,255,255,0.06)";
-        const tickColor = "#8b949e";
+        const tickColor = "#cac4d0";
 
         new Chart(document.getElementById("chart"), {
           type: "line",
@@ -207,7 +281,7 @@
               },
             },
             plugins: {
-              legend: { labels: { color: "#e6edf3" } },
+              legend: { labels: { color: "#e6e0e9" } },
               tooltip: {
                 callbacks: {
                   afterBody: (items) => {
