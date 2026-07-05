@@ -360,6 +360,12 @@
     "num_events": 1
   },
   {
+    "date": "2022-09-28",
+    "num_devices": 1,
+    "num_sessions": 1,
+    "num_events": 1
+  },
+  {
     "date": "2022-09-29",
     "num_devices": 1,
     "num_sessions": 3,
@@ -6958,5 +6964,11 @@
     "num_devices": 685,
     "num_sessions": 3492,
     "num_events": 3492
+  },
+  {
+    "date": "2026-07-04",
+    "num_devices": 655,
+    "num_sessions": 3284,
+    "num_events": 3284
   }
 ]
