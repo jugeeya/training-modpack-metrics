@@ -92,9 +92,15 @@ Roughly in order of impact for a game like Rivals 2:
    disabled here.
 
 4. **Logging volume.** Every `print()` from Lua goes to `UE4SS.log` (and to
-   the console buffers when those are on). A logger that prints per-hit
-   debug lines will pay file I/O during gameplay. Log only at set boundaries,
-   or buffer in Lua and flush when the set ends.
+   the console buffers when those are on). Since the JSON files are the
+   actual record, the MatchLogger's informational trace is gated behind a
+   `VERBOSE` flag at the top of `main.lua`, **off by default** — flip it to
+   `true` when debugging (e.g. after a game patch changes a widget). Three
+   lines always print regardless: "Script loaded" (confirms the install once
+   per launch) and the two error paths (widget not found, file write failed),
+   because a fully silent mod means silently lost sets. `UE4SS.log` itself
+   cannot be disabled via settings, but with the consoles off and `VERBOSE`
+   off it stays a few lines per game launch.
 
 5. **The MatchLogger itself accumulating work.** Audited: the current
    `main.lua` is clean — the three `NotifyOnNewObject` listeners are

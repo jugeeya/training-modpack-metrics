@@ -39,6 +39,15 @@ print("[MatchLogger] Script loaded")
 ---@class UResultsScreenWidget
 ---@field PlayerEntities ARivalsPlayerEntity[]
 
+-- The JSON files are the record; prints are diagnostics only. Errors always
+-- print (a silent mod means silently lost sets), but the informational trace
+-- is off by default. Set true when debugging (e.g. after a game patch).
+local VERBOSE = false
+
+local function Log(msg)
+    if VERBOSE then print(msg) end
+end
+
 -- Output folder sits next to the game binary (same dir as Mods/)
 local OUTPUT_DIR = "MatchLogger"
 local SETS_DIR = OUTPUT_DIR .. "/sets"
@@ -138,7 +147,7 @@ local function WriteJsonFile(filepath, tbl)
     if file then
         file:write(ToJson(tbl))
         file:close()
-        print("[MatchLogger] Saved: " .. filepath)
+        Log("[MatchLogger] Saved: " .. filepath)
         return true
     end
     print("[MatchLogger] ERROR writing file: " .. tostring(err))
@@ -192,7 +201,7 @@ local function FinalizeSet(complete)
     local filename = "set_" .. (CurrentSet.id or NowStamp()) ..
                      (complete and "" or "_interrupted") .. ".json"
     WriteJsonFile(SETS_DIR .. "/" .. filename, report)
-    print(string.format("[MatchLogger] === SET %s (%d matches, complete=%s) ===",
+    Log(string.format("[MatchLogger] === SET %s (%d matches, complete=%s) ===",
         tostring(CurrentSet.id), #CurrentSet.matches, tostring(complete)))
 
     CurrentSet = nil
@@ -218,7 +227,7 @@ NotifyOnNewObject("/Script/Rivals2.CharacterSelectScreenWidget", function()
         winsRequired = nil,
         matches = {},
     }
-    print("[MatchLogger] Set started (id=" .. CurrentSet.id .. ")")
+    Log("[MatchLogger] Set started (id=" .. CurrentSet.id .. ")")
 end)
 
 -- ---------------------------------------------------------------------------
@@ -235,7 +244,7 @@ NotifyOnNewObject("/Script/Rivals2.VersusScreenWidget", function()
             firstMatchStartIso = nil,
             matches = {},
         }
-        print("[MatchLogger] Set start not seen; tracking from this match (id=" .. CurrentSet.id .. ")")
+        Log("[MatchLogger] Set start not seen; tracking from this match (id=" .. CurrentSet.id .. ")")
     end
 
     CurrentSet.pendingMatchStartEpoch = NowEpoch()
@@ -249,7 +258,7 @@ end)
 -- Hook: Results → a match ended (log match; finalize set if it was the last)
 -- ---------------------------------------------------------------------------
 NotifyOnNewObject("/Script/Rivals2.ResultsScreenWidget", function()
-    print("[MatchLogger] Results screen created, logging stats...")
+    Log("[MatchLogger] Results screen created, logging stats...")
 
     ExecuteWithDelay(2000, function()
         ExecuteInGameThread(function()
@@ -284,12 +293,14 @@ function LogFromResultsWidget(widget)
         isLastInSet = maxWins >= winsRequired
     end
 
-    print(string.format("[MatchLogger] === MATCH RESULTS (%d players, winsRequired=%s, isLastInSet=%s) ===",
-        playerCount, tostring(winsRequired), tostring(isLastInSet)))
-    for _, p in ipairs(players) do
-        print(string.format(
-            "[MatchLogger] Slot %d | Name: %s | Char: %s | Wins: %d | KOs: %d | Deaths: %d | Falls: %d | DmgDealt: %d | DmgTaken: %d",
-            p.slot, p.name, p.character, p.wins, p.kos, p.deaths, p.falls, p.damageDealt, p.damageTaken))
+    if VERBOSE then
+        print(string.format("[MatchLogger] === MATCH RESULTS (%d players, winsRequired=%s, isLastInSet=%s) ===",
+            playerCount, tostring(winsRequired), tostring(isLastInSet)))
+        for _, p in ipairs(players) do
+            print(string.format(
+                "[MatchLogger] Slot %d | Name: %s | Char: %s | Wins: %d | KOs: %d | Deaths: %d | Falls: %d | DmgDealt: %d | DmgTaken: %d",
+                p.slot, p.name, p.character, p.wins, p.kos, p.deaths, p.falls, p.damageDealt, p.damageTaken))
+        end
     end
 
     -- Make sure a set exists to attach this match to (mid-set mod load).
@@ -327,7 +338,7 @@ function LogFromResultsWidget(widget)
         players = players,
     }
     WriteJsonFile(OUTPUT_DIR .. "/" .. NowStamp() .. ".json", matchReport)
-    print("[MatchLogger] === END RESULTS ===")
+    Log("[MatchLogger] === END RESULTS ===")
 
     -- If this game decided the set, write the set file and reset.
     if isLastInSet == true then
