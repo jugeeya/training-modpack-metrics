@@ -14,36 +14,52 @@ hooks, no extra mods.
 > directly for local/offline play). Keep the MatchLogger to contexts where
 > that is permitted.
 
-## Install layout
+## Install layout (nested — easy install/uninstall)
 
-Copy these files over a **current experimental release** of
+Use a **current experimental release** of
 [RE-UE4SS](https://github.com/UE4SS-RE/RE-UE4SS/releases) (Rivals 2 is UE5;
-the old 0.3.0 stable predates proper UE5.3+ support and had known performance
-issues since fixed):
+the old 3.0.1 stable predates proper UE5.3+ support and had known performance
+issues since fixed). Since the post-3.0 experimental builds, the release zip
+already keeps everything in a nested `ue4ss/` folder — the **only** file that
+sits next to the game exe is the small proxy loader:
 
 ```
 Rivals2/Binaries/Win64/
 ├── Rivals2-Win64-Shipping.exe      (the game — already there)
-├── dwmapi.dll                      (UE4SS proxy loader, from the release zip)
-├── UE4SS.dll
-├── UE4SS-settings.ini              ← replace with the one in this directory
-└── Mods/
-    ├── mods.txt                    ← replace with the one in this directory
-    ├── mods.json                   ← replace with the one in this directory
-    ├── MatchLogger/
-    │   └── Scripts/main.lua        ← included in this directory
-    └── ...                         (the mods that ship with UE4SS)
+├── dwmapi.dll                      (UE4SS proxy loader — the ONLY loose file)
+└── ue4ss/
+    ├── UE4SS.dll
+    ├── UE4SS-settings.ini          ← replace with the one in this directory
+    └── Mods/
+        ├── mods.txt                ← replace with the one in this directory
+        ├── mods.json               ← replace with the one in this directory
+        ├── MatchLogger/
+        │   └── Scripts/main.lua    ← included in this directory
+        └── ...                     (the mods that ship with UE4SS)
 ```
+
+(The old flat layout — everything next to the exe — still works for backwards
+compatibility, but there's no reason to use it for a new install.)
+
+That makes install/uninstall trivial:
+
+* **Install:** drop `dwmapi.dll` + the `ue4ss/` folder into `Win64/`.
+* **Temporarily disable:** rename or delete `dwmapi.dll` (e.g. to
+  `dwmapi.dll.off`). One file — the whole `ue4ss/` folder can stay in place
+  and is inert without the proxy.
+* **Full uninstall:** delete `dwmapi.dll` and the `ue4ss/` folder (and the
+  `MatchLogger/` output folder next to the exe if you don't want the logs).
 
 Two install mistakes that silently undo the minimal profile:
 
 * **`enabled.txt` overrides everything.** A mod folder containing
   `enabled.txt` loads even when `mods.txt`/`mods.json` says `0`. Delete
   `enabled.txt` from every shipped mod folder you're disabling.
-* **Renaming DLLs is not a configuration mechanism.** The console windows are
-  controlled by the three switches in `[Debug]`. Renaming `dwmapi.dll` just
-  stops UE4SS from loading at all, and renaming other DLLs leaves UE4SS in a
-  half-configured state. With this profile in place, no DLLs need renaming.
+* **Renaming DLLs is an on/off switch, not a configuration mechanism.**
+  Renaming `dwmapi.dll` cleanly disables UE4SS entirely (that's the intended
+  toggle above), but it can't selectively remove the console or hooks — those
+  are the `[Debug]` and `[Hooks]` switches in `UE4SS-settings.ini`. With this
+  profile in place there's nothing left to disable by renaming.
 
 ## Where UE4SS lag actually comes from
 
@@ -136,6 +152,27 @@ APIs that would require re-enabling something:
 A misconfiguration fails loudly, not silently: if a Lua API needs a disabled
 hook, the registration call errors in `UE4SS.log` naming the function —
 re-enable the matching row and nothing else.
+
+### Why the engine-tick check stays on for the mod's whole lifetime
+
+`HookEngineTick` is not there for startup registration — the
+`NotifyOnNewObject` listeners need no hooks at all. It exists to service
+`ExecuteInGameThread()`, which the MatchLogger calls at **every** results
+screen: `ExecuteWithDelay`'s callback runs on a background timer thread, and
+reading UObject properties off the game thread is unsafe, so the mod queues
+the extraction back onto the game thread and the engine-tick detour is what
+drains that queue. Turning it off after startup would break logging for every
+match, and UE4SS has no mechanism for it anyway — detours are installed once
+at startup from the settings file and are never removed at runtime.
+
+It is also not worth removing. When the queue is empty the detour's work is a
+lock plus an empty-list check — on the order of tens of nanoseconds against a
+16.7 ms frame budget (about 0.0001% of a frame), far below anything
+measurable. The expensive hooks are the per-Blueprint-call and per-actor ones,
+and those are all off. The only UE4SS-supported alternative queue-drain path
+(`DefaultExecuteInGameThreadMethod = ProcessEvent`) would require
+`HookUObjectProcessEvent`, which wraps every UFunction call in the game —
+strictly worse.
 
 ## Bisecting whatever lag remains
 
