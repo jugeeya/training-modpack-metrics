@@ -50,6 +50,13 @@ That makes install/uninstall trivial:
 * **Full uninstall:** delete `dwmapi.dll` and the `ue4ss/` folder (and the
   `MatchLogger/` output folder next to the exe if you don't want the logs).
 
+The proxy's name must be exactly `dwmapi.dll`, in exactly that directory:
+UE4SS gets loaded because the engine imports the real Windows `dwmapi.dll`
+and Windows checks the exe's directory before `System32`. The proxy also
+forwards dwmapi's specific exports, so it can't be renamed to another
+hijackable DLL name either. That name-dependence is why the rename-to-disable
+toggle works — a file named anything else is simply never loaded.
+
 Two install mistakes that silently undo the minimal profile:
 
 * **`enabled.txt` overrides everything.** A mod folder containing
