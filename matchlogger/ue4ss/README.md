@@ -1,7 +1,13 @@
 # Minimal UE4SS profile for the Rivals of Aether II MatchLogger
 
-A stripped-down UE4SS configuration that keeps only what a passive Lua stats
-logger needs, and a guide for isolating whatever residual lag remains.
+A stripped-down UE4SS configuration that keeps only what the MatchLogger Lua
+mod (included under `Mods/MatchLogger/`) needs, and a guide for isolating
+whatever residual lag remains. The profile is tuned to the MatchLogger's
+actual API usage: it registers three `NotifyOnNewObject` listeners at load
+and does all its work at match/set boundaries, so under this profile UE4SS's
+entire steady-state footprint is one cheap check per engine tick plus a
+class-pointer compare when objects are constructed — no consoles, no script
+hooks, no extra mods.
 
 > **Anti-cheat note:** Rivals of Aether II ships with Easy Anti-Cheat. UE4SS
 > only injects when the game runs without EAC (e.g. launching the shipping exe
@@ -25,8 +31,7 @@ Rivals2/Binaries/Win64/
     ├── mods.txt                    ← replace with the one in this directory
     ├── mods.json                   ← replace with the one in this directory
     ├── MatchLogger/
-    │   ├── enabled.txt             (optional; mods.txt already enables it)
-    │   └── Scripts/main.lua
+    │   └── Scripts/main.lua        ← included in this directory
     └── ...                         (the mods that ship with UE4SS)
 ```
 
@@ -58,11 +63,11 @@ Roughly in order of impact for a game like Rivals 2:
    * `HookUObjectProcessEvent` — wraps every UFunction call in the game.
    * `HookProcessInternal` / `HookProcessLocalScriptFunction` — wrap every
      *Blueprint* function call. Rivals 2's game flow is heavily
-     Blueprint-based, so these are hot. They are unfortunately also exactly
-     what `RegisterHook()` on a Blueprint function needs (see table below).
+     Blueprint-based, so these are hot. Only `RegisterHook()` on a Blueprint
+     function needs them, and the MatchLogger never calls `RegisterHook`.
    * `HookAActorTick` — fires per ticking actor, per frame.
-   This profile turns off everything except the script hooks and
-   `HookEngineTick`.
+   This profile turns off everything except `HookEngineTick` (needed by
+   `ExecuteInGameThread`).
 
 3. **The default mod set.** UE4SS ships with six mods enabled
    (CheatManagerEnabler, ConsoleCommands, ConsoleEnabler, LineTrace,
@@ -75,8 +80,11 @@ Roughly in order of impact for a game like Rivals 2:
    debug lines will pay file I/O during gameplay. Log only at set boundaries,
    or buffer in Lua and flush when the set ends.
 
-5. **The MatchLogger itself accumulating work.** See the next section — if
-   lag *only* shows up after many sets, the mod is as suspect as UE4SS.
+5. **The MatchLogger itself accumulating work.** Audited: the current
+   `main.lua` is clean — the three `NotifyOnNewObject` listeners are
+   registered once at script load, nothing re-registers per match, and the
+   only growing state (`CurrentSet.matches`) is flushed to disk and reset at
+   set end. The checklist below is for future changes.
 
 ## Progressive lag: audit the MatchLogger for these
 
@@ -98,36 +106,36 @@ which look fine in the first game and degrade linearly with playtime:
 Quick check: play ~20 sets, watch `UE4SS.log`. If the same message starts
 appearing 2×, 3×, 4× per event, hooks are accumulating.
 
-## What each MatchLogger API actually requires
+## What the MatchLogger actually uses, and what each API requires
 
-Verified against the RE-UE4SS source (`LuaMod.cpp`): `RegisterHook` on a
-native function patches that one function directly and needs **no** global
-hooks; only script/Blueprint targets go through the global dispatcher.
+The mod's complete UE4SS API surface (from `Mods/MatchLogger/Scripts/main.lua`),
+with hook requirements verified against the RE-UE4SS source (`LuaMod.cpp`):
 
-| MatchLogger uses…                          | Must keep in `UE4SS-settings.ini`                    |
+| MatchLogger uses                                 | Must keep in `UE4SS-settings.ini`                    |
+| ------------------------------------------------ | ---------------------------------------------------- |
+| `NotifyOnNewObject` (3× widget classes)          | nothing — object-array listeners, no `[Hooks]` entry |
+| `ExecuteWithDelay`                               | nothing — async timer thread                         |
+| `ExecuteInGameThread`                            | `HookEngineTick = 1` (with `DefaultExecuteInGameThreadMethod = EngineTick`) |
+| `FindFirstOf("ResultsScreenWidget")`             | `bUseUObjectArrayCache = true` (for speed; works without) |
+| Direct UFunction calls (`GetPlayerResultsInfo`, `GetWinsRequired`, `IsLastMatchInSet`, …) | nothing — direct `ProcessEvent` invocation |
+| `io.open` / `os.execute` / `os.date` / `print`   | nothing                                              |
+
+Everything else is off because the mod does not use it. For reference, the
+APIs that would require re-enabling something:
+
+| If a future version adds…                  | Re-enable                                            |
 | ------------------------------------------ | ---------------------------------------------------- |
-| `RegisterHook` on a **Blueprint** function | `HookProcessInternal` + `HookProcessLocalScriptFunction` |
-| `RegisterHook` on a **native** function    | nothing — direct hook                                |
-| `ExecuteInGameThread`                      | `HookEngineTick` (with `DefaultExecuteInGameThreadMethod = EngineTick`) |
-| `FindFirstOf` / `FindAllOf` / `StaticFindObject` | `bUseUObjectArrayCache = true` (for speed; works without) |
-| `NotifyOnNewObject`                        | nothing — object-array listeners, no `[Hooks]` entry |
-| `LoopAsync` / `ExecuteAsync` / file I/O    | nothing                                              |
-| `RegisterKeyBind`                          | `Keybinds` mod enabled in `mods.txt`                 |
-| `RegisterConsoleCommandHandler`            | `HookProcessConsoleExec = 1` (off in this profile)   |
-| `RegisterInitGameStatePreHook/PostHook`    | `HookInitGameState = 1` (off in this profile)        |
-| `RegisterLoadMapPreHook/PostHook`          | `HookLoadMap = 1` (off in this profile)              |
-| `RegisterBeginPlayPreHook/PostHook`        | `HookBeginPlay = 1` (off in this profile)            |
+| `RegisterHook` on a **Blueprint** function | `HookProcessInternal` + `HookProcessLocalScriptFunction` (the expensive ones) |
+| `RegisterHook` on a **native** function    | nothing — patches that one function directly         |
+| `RegisterKeyBind`                          | `Keybinds` mod in `mods.txt`                         |
+| `RegisterConsoleCommandHandler`            | `HookProcessConsoleExec = 1`                         |
+| `RegisterInitGameStatePreHook/PostHook`    | `HookInitGameState = 1`                              |
+| `RegisterLoadMapPreHook/PostHook`          | `HookLoadMap = 1`                                    |
+| `RegisterBeginPlayPreHook/PostHook`        | `HookBeginPlay = 1`                                  |
 
-If the MatchLogger errors at startup or a callback stops firing after
-switching to this profile, the log line will name the API — re-enable the
-matching row and nothing else.
-
-**Best case:** if the MatchLogger turns out to hook only native functions and
-not use `ExecuteInGameThread`, set `HookProcessInternal`,
-`HookProcessLocalScriptFunction`, and `HookEngineTick` to `0` too. That
-leaves UE4SS with *zero* per-frame presence — injection, the object cache,
-and the mod's own directly-hooked functions — which should be
-indistinguishable from vanilla.
+A misconfiguration fails loudly, not silently: if a Lua API needs a disabled
+hook, the registration call errors in `UE4SS.log` naming the function —
+re-enable the matching row and nothing else.
 
 ## Bisecting whatever lag remains
 
@@ -140,11 +148,9 @@ spikes, not just average FPS):
    already lags noticeably vs. baseline and it's present from the first
    match, test step 3; if it only appears after long sessions, audit the
    MatchLogger per the section above.
-3. **Script hooks:** set `HookProcessInternal = 0` and
-   `HookProcessLocalScriptFunction = 0` (MatchLogger's BP hooks will stop
-   working — this is a measurement, not a fix). If the lag disappears, the
-   cost is per-Blueprint-call dispatch; the fix is to move the MatchLogger's
-   hooks to native-function targets where possible.
+3. **Engine tick hook:** set `HookEngineTick = 0` (the results screen will
+   stop being logged — this is a measurement, not a fix). This leaves UE4SS
+   with zero per-frame presence.
 4. **Object cache:** set `bUseUObjectArrayCache = false` and re-measure
    (rarely the cause; also slows `FindFirstOf`).
 5. **Everything else was already off.** If lag persists with all of the

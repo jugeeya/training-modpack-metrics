@@ -20,5 +20,6 @@ jsbLuaProfilerMod : 0
 MatchLogger : 1
 
 ; Built-in keybinds, do not move up!
-; Set to 0 as well if the MatchLogger never calls RegisterKeyBind().
-Keybinds : 1
+; Disabled: the MatchLogger never calls RegisterKeyBind(). Re-enable if a
+; future mod (or hot-reload keybind workflow) needs it.
+Keybinds : 0
