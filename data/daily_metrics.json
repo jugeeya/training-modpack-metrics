@@ -114,6 +114,12 @@
     "num_events": 1
   },
   {
+    "date": "2022-01-29",
+    "num_devices": 1,
+    "num_sessions": 1,
+    "num_events": 1
+  },
+  {
     "date": "2022-02-02",
     "num_devices": 1,
     "num_sessions": 1,
@@ -376,6 +382,12 @@
     "num_devices": 1,
     "num_sessions": 3,
     "num_events": 3
+  },
+  {
+    "date": "2022-09-30",
+    "num_devices": 1,
+    "num_sessions": 1,
+    "num_events": 1
   },
   {
     "date": "2022-10-01",
@@ -6988,5 +7000,11 @@
     "num_devices": 699,
     "num_sessions": 3578,
     "num_events": 3579
+  },
+  {
+    "date": "2026-07-06",
+    "num_devices": 635,
+    "num_sessions": 3423,
+    "num_events": 3424
   }
 ]
