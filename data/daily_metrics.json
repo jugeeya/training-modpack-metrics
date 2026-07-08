@@ -1134,6 +1134,12 @@
     "num_events": 4
   },
   {
+    "date": "2023-06-15",
+    "num_devices": 1,
+    "num_sessions": 1,
+    "num_events": 1
+  },
+  {
     "date": "2023-06-22",
     "num_devices": 1,
     "num_sessions": 8,
@@ -7006,5 +7012,11 @@
     "num_devices": 635,
     "num_sessions": 3423,
     "num_events": 3424
+  },
+  {
+    "date": "2026-07-07",
+    "num_devices": 672,
+    "num_sessions": 3514,
+    "num_events": 3514
   }
 ]
