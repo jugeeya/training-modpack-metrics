@@ -111,7 +111,7 @@ def iter_input_files(paths):
             print(f"! Path not found, skipping: {p}", file=sys.stderr)
             continue
         candidates = (
-            sorted(q for q in p.rglob("*") if q.suffix.lower() in (".json", ".ndjson"))
+            sorted(q for q in p.rglob("*") if q.is_file() and q.suffix.lower() in (".json", ".ndjson"))
             if p.is_dir()
             else [p]
         )
