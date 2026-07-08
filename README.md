@@ -139,6 +139,34 @@ To preview the dashboard, serve the directory and open it (a plain
 python -m http.server 8000   # then visit http://localhost:8000/
 ```
 
+## Backfilling from local files
+
+`aggregate.py` only reads live events from Firebase. To fold in **local**
+historical data — e.g. the exports the original Rust tool consumed — use
+`scripts/backfill.py`. It has no third-party dependencies (standard library
+only) and never sends your raw data anywhere; it just reads the files and
+updates `data/daily_metrics.json` locally.
+
+```bash
+# a file or a directory (scanned recursively for *.json / *.ndjson)
+python scripts/backfill.py /path/to/TrainingModpackData
+
+# preview without writing
+python scripts/backfill.py /path/to/TrainingModpackData --dry-run
+```
+
+Each input file is auto-detected as NDJSON (one event object per line), a JSON
+array of events, or a nested Firebase export (walked generically). Events are
+bucketed per UTC day into `num_devices` / `num_sessions` / `num_events`, using
+the same 2021-09-01 cutoff and garbage-timestamp handling as the daily job.
+
+**Merge policy:** dates not already present are added; a date present in both
+the JSON and the backfill has each metric set to the **max** of the two, so a
+backfill never *reduces* a count — it enriches sparse early days without
+clobbering the complete counts the live pipeline produced. Pass `--only-new` to
+skip overlapping dates entirely. After running, review the diff to
+`data/daily_metrics.json`, then commit and push.
+
 ## Hosting
 
 This lives in its own public repo (`jugeeya/training-modpack-metrics`) so its
