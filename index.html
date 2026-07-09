@@ -205,6 +205,7 @@
 
     <script>
       const COLORS = { devices: "#ffb0cd", sessions: "#8fd3e8" };
+      Chart.defaults.font.family = "'Space Grotesk', 'Roboto', system-ui, sans-serif";
 
       async function load() {
         const status = document.getElementById("status");
@@ -223,8 +224,15 @@
           return;
         }
 
-        const today = new Date().toISOString().slice(0, 10);
-        rows = rows.filter((r) => r.date <= today);
+        // The daily aggregation only finalizes a day once it's fully elapsed
+        // (UTC) and runs once every 24h, so even "yesterday" can still be
+        // missing late-arriving events at any given moment. Cut off at the
+        // day before yesterday so the displayed "latest" day is never one
+        // that's still accumulating.
+        const cutoffDate = new Date();
+        cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 1);
+        const cutoff = cutoffDate.toISOString().slice(0, 10);
+        rows = rows.filter((r) => r.date <= cutoff);
         rows.sort((a, b) => a.date.localeCompare(b.date));
 
         if (rows.length === 0) {
@@ -283,7 +291,16 @@
             scales: {
               x: {
                 type: "time",
-                time: { unit: "day", tooltipFormat: "yyyy-MM-dd" },
+                time: {
+                  tooltipFormat: "yyyy-MM-dd",
+                  displayFormats: {
+                    day: "MMM d, yyyy",
+                    week: "MMM d, yyyy",
+                    month: "MMM yyyy",
+                    quarter: "MMM yyyy",
+                    year: "yyyy",
+                  },
+                },
                 grid: { color: gridColor },
                 ticks: { color: tickColor, maxRotation: 0, autoSkip: true },
               },
