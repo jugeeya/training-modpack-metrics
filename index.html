@@ -32,9 +32,10 @@
         --accent-pink: #ffb0cd;
         --accent-amber: #f4c66b;
 
-        /* two chart series — warm vs cool so the lines read apart */
+        /* three chart series, spread across the accent palette so the lines read apart */
         --devices: #ffb0cd;
         --sessions: #8fd3e8;
+        --events: #f4c66b;
 
         --font: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
         --font-display: "Space Grotesk", "Roboto", system-ui, sans-serif;
@@ -172,7 +173,7 @@
       <a class="back-link" href="https://jugeeya.github.io/">&larr; Back to home</a>
 
       <h1>Ultimate Training Modpack — Users and Sessions by Date</h1>
-      <p class="subtitle">Daily unique devices and sessions, aggregated from menu-open analytics.</p>
+      <p class="subtitle">Daily unique devices, sessions, and events, aggregated from menu-open analytics.</p>
 
       <div class="stats" id="stats" hidden>
         <div class="stat">
@@ -204,7 +205,7 @@
     </main>
 
     <script>
-      const COLORS = { devices: "#ffb0cd", sessions: "#8fd3e8" };
+      const COLORS = { devices: "#ffb0cd", sessions: "#8fd3e8", events: "#f4c66b" };
       Chart.defaults.font.family = "'Space Grotesk', 'Roboto', system-ui, sans-serif";
 
       async function load() {
@@ -224,13 +225,14 @@
           return;
         }
 
-        // The daily aggregation only finalizes a day once it's fully elapsed
-        // (UTC) and runs once every 24h, so even "yesterday" can still be
-        // missing late-arriving events at any given moment. Cut off at the
-        // day before yesterday so the displayed "latest" day is never one
-        // that's still accumulating.
+        // aggregate.py never finalizes "today" (UTC), so the freshest row
+        // already present is always yesterday — and late-arriving events for
+        // an already-finalized day are silently dropped rather than merged
+        // in, so that freshest day can still be undercounted for a while.
+        // Cut off two days back so the displayed "latest" day is always one
+        // that's had a full extra day to settle, not the one just finalized.
         const cutoffDate = new Date();
-        cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 1);
+        cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 2);
         const cutoff = cutoffDate.toISOString().slice(0, 10);
         rows = rows.filter((r) => r.date <= cutoff);
         rows.sort((a, b) => a.date.localeCompare(b.date));
@@ -282,6 +284,15 @@
                 pointRadius: 2,
                 borderWidth: 2,
               },
+              {
+                label: "Events",
+                data: rows.map((r) => r.num_events),
+                borderColor: COLORS.events,
+                backgroundColor: COLORS.events,
+                tension: 0.2,
+                pointRadius: 2,
+                borderWidth: 2,
+              },
             ],
           },
           options: {
@@ -312,14 +323,6 @@
             },
             plugins: {
               legend: { labels: { color: "#e6e0e9" } },
-              tooltip: {
-                callbacks: {
-                  afterBody: (items) => {
-                    const row = rows[items[0].dataIndex];
-                    return `Events: ${row.num_events.toLocaleString()}`;
-                  },
-                },
-              },
             },
           },
         });
