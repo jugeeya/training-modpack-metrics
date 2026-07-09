@@ -52,10 +52,6 @@ from pathlib import Path
 # WHERE clause). Value is epoch milliseconds.
 MIN_EVENT_TIME_MS = 1_630_454_400_000
 
-# Events dated more than this far in the future are garbage from a mis-set
-# device clock (dates like 2052, 2757 have been observed).
-FUTURE_TOLERANCE_MS = 2 * 24 * 60 * 60 * 1000
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 METRICS_FILE = REPO_ROOT / "data" / "daily_metrics.json"
 
@@ -135,14 +131,23 @@ def normalize_ms(raw):
     return ts
 
 
-def event_day(event, now_ms):
-    """UTC ``YYYY-MM-DD`` for a usable event, or None if it should be dropped."""
+def event_day(event, today):
+    """UTC ``YYYY-MM-DD`` for a usable event, or None if it should be dropped.
+
+    Matches aggregate.py's cutoff: today's still-accumulating events and
+    anything dated later (near-future clock skew, or genuine future garbage)
+    are dropped rather than finalized, since a backfill run can't guarantee
+    it has seen every event for an incomplete day.
+    """
     ts_ms = normalize_ms(event.get("event_time"))
     if ts_ms is None:
         return None
-    if ts_ms < MIN_EVENT_TIME_MS or ts_ms > now_ms + FUTURE_TOLERANCE_MS:
+    if ts_ms < MIN_EVENT_TIME_MS:
         return None
-    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date().isoformat()
+    day = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date().isoformat()
+    if day >= today:
+        return None
+    return day
 
 
 def load_existing():
@@ -164,7 +169,7 @@ def main() -> None:
                     help="report changes without writing the file")
     args = ap.parse_args()
 
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    today = datetime.now(timezone.utc).date().isoformat()
 
     buckets: dict[str, dict] = {}
     total = kept = 0
@@ -176,7 +181,7 @@ def main() -> None:
         n_file = 0
         for event in iter_events_from_file(path):
             total += 1
-            day = event_day(event, now_ms)
+            day = event_day(event, today)
             if day is None:
                 continue
             kept += 1
