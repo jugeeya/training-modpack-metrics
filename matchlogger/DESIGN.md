@@ -25,42 +25,57 @@ the MatchLogger the same two coordinates the rest of the system uses.
 
 ## Components
 
+At a real event only **one** person operates consistently (station 1, or a
+satellite PC/laptop/phone), while every station needs to report. So the
+station PCs run a **headless sender** with no UI, the broker is the
+**aggregation hub**, and there is **one operator surface** — a hosted web
+console and/or Discord — that sees every station at once.
+
 ```mermaid
 flowchart LR
-    subgraph PC["Tournament PC (offline / no EAC)"]
+    subgraph ST["Stations 1..N PC (headless, no operator)"]
         Game["Rivals 2 + UE4SS<br/>MatchLogger mod"]
-        Files["MatchLogger/<br/>sets/*.json (per set)<br/>*.json (per match)<br/>current.json (live state)"]
-        Agent["Companion agent<br/>(local web server)"]
-        UI["Local Web UI<br/>localhost:PORT"]
+        Files["MatchLogger/ JSON<br/>(per-set + current.json)"]
+        Sender["Station sender<br/>(watch files → POST)"]
         Game -->|writes| Files
-        Agent -->|watches| Files
-        Agent <-->|SSE + REST| UI
+        Sender -->|watches| Files
     end
-    Broker["r2tag-broker<br/>Cloudflare Worker<br/>(holds start.gg token)"]
-    StartGG["start.gg GraphQL API"]
-    Discord["Discord webhook"]
-    Splitter["VOD splitter<br/>(browser tool)"]
+    Broker["r2tag-broker (Cloudflare Worker)<br/>aggregation store + start.gg token"]
+    subgraph OPS["Operator surfaces — one human, all stations"]
+        Console["Web console on jugeeya.github.io<br/>(satellite PC / laptop / phone)"]
+        Discord["Discord bot<br/>(confirm buttons + /report)"]
+    end
+    StartGG["start.gg API"]
+    Splitter["VOD splitter (browser)"]
 
-    Agent -->|"POST /matchlogger/ingest<br/>GET /startgg/station"| Broker
+    Sender -->|"POST /matchlogger/ingest (station N)"| Broker
     Broker <--> StartGG
-    Broker --> Discord
+    Console <-->|"read sets · confirm report"| Broker
+    Discord <-->|"interactions"| Broker
     Broker -->|"/startgg/sets (existing)"| Splitter
 ```
 
-The design keeps three concerns strictly separated:
+The design keeps four concerns strictly separated:
 
 - **The mod stays dumb and tournament-agnostic.** It writes JSON to disk and
   nothing else — no networking, no secrets, no station awareness. The same
   install works at any station.
-- **The agent is the human-in-the-loop console.** It owns the station number,
-  watches the files, talks to the broker, and renders the operator UI. All
-  the ambiguous decisions (confirm a winner, correct an entrant mapping, push
-  a report) live here.
-- **The broker holds the secrets and does the network work.** The start.gg
-  OAuth token and the Discord webhook never leave the Worker — the tournament
-  PC only ever talks to the broker.
+- **The station sender is headless.** A tiny per-station background process
+  that watches the MatchLogger folder and POSTs finished sets to the broker
+  with its station number. No UI, set-and-forget — this is what lets stations
+  2..N run with nobody sitting at them. Its station number is its only config
+  (a launch arg or one-line file).
+- **The broker is the aggregation hub and holds the secrets.** It stores every
+  ingested set per event (keyed by station + time), does the start.gg matching
+  and writes, and drives Discord. The start.gg OAuth token and Discord
+  credentials never leave the Worker.
+- **The operator surface is the human-in-the-loop console**, and there is one
+  of it per event, not per station. Two interchangeable forms, both reading
+  the broker's aggregated view: a **hosted web console** and **Discord**. All
+  ambiguous decisions (confirm a winner, fix an entrant mapping, push a
+  report) happen here.
 
-This is the same shape as the existing metrics project (mod → files → agent →
+This is the same shape as the existing metrics project (mod → files → sender →
 cloud) and the VOD splitter (browser → broker → start.gg).
 
 ## Data the mod already writes
@@ -88,7 +103,7 @@ cloud) and the VOD splitter (browser → broker → start.gg).
 1. **Epoch timestamps.** The set report has ISO strings; the join with
    start.gg (`startedAt`/`completedAt` are epoch seconds) and with the VOD
    splitter is cleanest if the mod also emits `startEpoch` / `endEpoch`
-   (`os.time()` is already computed internally). The agent could parse the
+   (`os.time()` is already computed internally). The sender could parse the
    `Z` ISO strings as UTC instead, but explicit epochs are less error-prone.
 
 2. **A live-state file for "now playing".** To drive the UI's live station
@@ -105,59 +120,49 @@ cloud) and the VOD splitter (browser → broker → start.gg).
    This is a small addition riding on hooks already in `main.lua`, and it is
    what makes identity matching reliable (see below).
 
-## The agent (local web server)
+## The station sender (headless, per station)
 
-A small local process — the recommended stack is a tiny HTTP server (Python
-FastAPI/Flask or Node) serving a page styled with the same
-`jugeeya.github.io` MD3 `styles.css`, launched from a tray icon that just
-opens `localhost:PORT`.
+A tiny background process on each game PC — Python or Node, or an eventual
+small `.exe`. It has no UI and no secrets; its only config is which station it
+is (`--station 3`, or a one-line file). It:
 
-### State
+- **Watches** `MatchLogger/sets/*.json` (new set) and `current.json` (live
+  state).
+- **On set start** (`current.json` → `set_start`): POSTs a lightweight
+  heartbeat to `/matchlogger/current` so the broker (and thus the operator
+  surface) knows station N just started a set — this is what triggers the
+  broker's `/startgg/station` pre-binding.
+- **On a new set file:** stamps the station and POSTs it to
+  `/matchlogger/ingest`, then marks the file consumed (same "clear after
+  consume" pattern as the metrics project).
 
-Held in a local JSON file or SQLite next to the agent:
+It retries on failure and is otherwise invisible. Stations 2..N run only this.
+
+## The broker as aggregation hub
+
+The broker stores, per event, every ingested set keyed by station + time, plus
+the latest `current` heartbeat per station. That aggregated view is what both
+operator surfaces read, so the human sees all stations without anything being
+co-located. Suggested shape (Cloudflare KV/R2/D1):
 
 ```jsonc
+// GET /matchlogger/event?slug=…  → the operator's whole-event view
 {
-  "config": { "brokerBaseUrl": "https://r2tag-broker.jdsambasivam.workers.dev",
-              "eventSlug": "tournament/…/event/…",
-              "station": 5 },
+  "stations": {
+    "3": { "current": { "state": "match_start", "setId": "…", "since": 170533… },
+           "entrants": [ { "id": "…", "name": "…" }, … ] }   // pre-bound at set start
+  },
   "sets": [
-    {
-      "localId": 1,
-      "ingestedAt": 1705330985,
-      "modSet": { …the set json above… },
+    { "id": "…", "station": 3, "ingestedAt": 170533…,
+      "modSet": { …character/score/stats… },
       "matchedStartggSetId": "12345678",
-      "entrants": [ { "id": "…", "name": "…", "seed": 3 }, … ],
-      "candidateWinnerEntrantId": "…",
-      "confidence": "high | low | none",
-      "status": "recorded | matched | notified | reported | error"
-    }
+      "candidateWinnerEntrantId": "…", "confidence": "high|low|none",
+      "status": "recorded | matched | notified | reported | error" }
   ]
 }
 ```
 
-### Responsibilities
-
-- **Watch** `MatchLogger/sets/*.json` (new set) and `current.json` (live state).
-- **On set start** (`current.json` → `set_start`): call the broker
-  `/startgg/station` to fetch the entrants currently at this station, cache
-  them, and show "now playing" in the UI.
-- **On a new set file:** stamp the station, POST to `/matchlogger/ingest`,
-  record the returned match + candidate winner + confidence, advance status.
-- **Serve** the UI and push live updates over SSE.
-
-### UI (localhost page)
-
-- **Config row:** station selector (persists — the field that replaced
-  `station.txt`), event slug, broker URL.
-- **Now-playing panel:** live from `current.json` + the cached station
-  entrants — "Station 5: [A] vs [B] — Winners R2".
-- **Sets-recorded-today table:** one row per set, columns for time, players
-  (character), score, matched start.gg round, and **status**. Ambiguous rows
-  expose per-row actions: *confirm winner*, *fix entrant mapping*, *report to
-  start.gg*.
-
-## Broker endpoints
+### Endpoints
 
 Existing:
 
@@ -165,18 +170,53 @@ Existing:
 
 New:
 
-- `GET /startgg/station?slug=…&station=N` → the set currently called/in
-  progress at station N: `{ setId, fullRoundText, state, entrants:[{id, name,
-  seed}] }`. Powers live tracking and pre-binding.
-- `POST /matchlogger/ingest` → body `{ slug, station, set, entrants? }`.
-  Matches the set (station + time window), computes a candidate winner +
-  confidence, fires the Discord ping, returns the match result. **Read-only
+- `POST /matchlogger/current` → body `{ slug, station, current }`. Records the
+  heartbeat; on a `set_start`, looks up `/startgg/station` and caches the
+  entrants for pre-binding.
+- `GET /startgg/station?slug=…&station=N` → the set called/in progress at
+  station N: `{ setId, fullRoundText, state, entrants:[{id, name, seed}] }`.
+- `POST /matchlogger/ingest` → body `{ slug, station, set }`. Stores the set,
+  matches it (station + time window, using the pre-bound entrants), computes a
+  candidate winner + confidence, fires the Discord notification. **Read-only
   with respect to the bracket.**
+- `GET /matchlogger/event?slug=…` → the aggregated whole-event view above,
+  for the web console (and an SSE variant for live updates).
 - `POST /matchlogger/report` → body `{ slug, setId, winnerEntrantId,
-  gameData? }`. Calls start.gg's `reportBracketSet` mutation. Only invoked
-  from an explicit operator action (or auto, guarded — see below).
+  gameData? }`. Calls start.gg's `reportBracketSet` mutation. Invoked from an
+  explicit operator action on either surface (or auto, guarded — see below).
+- `POST /discord/interactions` → Discord's interaction webhook: handles the
+  confirm/report buttons and the manual `/report` slash command.
 
-The start.gg token and Discord webhook stay server-side in the Worker.
+The start.gg token and Discord credentials stay server-side in the Worker.
+
+## Operator surface 1 — the web console (on jugeeya.github.io)
+
+A static page alongside `/vods`, sharing `styles.css` and the broker — no
+local server, runs on any satellite PC, laptop, or phone. It reads
+`/matchlogger/event` (SSE for live updates) and shows:
+
+- **Config:** event slug (broker URL is implicit).
+- **Stations panel:** one live "now playing" card per station from the
+  heartbeats — "Station 3: [A] vs [B] — Winners R2".
+- **Sets-today table across all stations:** columns for station, time, players
+  (character), score, matched start.gg round, and **status**. Ambiguous rows
+  expose *confirm winner*, *fix entrant mapping*, *report to start.gg* — each
+  a call to `/matchlogger/report`.
+
+## Operator surface 2 — Discord
+
+Interchangeable with the web console, and often the more practical one since
+TOs already live in Discord:
+
+- **Notify + confirm inline.** On ingest the broker posts a message to a
+  configured channel — "Station 3: set complete, 3–1, ~12 min, winner on
+  Clairen → likely **[EntrantA]**" — with **Report 3–1** / **Swap winner** /
+  **Ignore** buttons. Clicking Report calls the same `/matchlogger/report`
+  path. Works from a phone, no software.
+- **Manual `/report` slash command.** `/report station:3 score:3-1
+  winner:@Player` — a fallback ingestion path for stations *not* running the
+  mod, or for corrections. The broker resolves the station's set and writes
+  it, so Discord doubles as a lightweight reporting UI for the whole event.
 
 ## Identity matching — the hard part, and the rule
 
@@ -188,9 +228,10 @@ winner**.
   assumption the VOD splitter and TSH already rely on.
 - **Which entrant won?** Fragile: in-game names (Steam/display) do not
   reliably equal start.gg tags, so exact-match is unreliable. The fix is to
-  **capture the two entrants at set start** (the `/startgg/station` call
-  triggered by `current.json`), so by set end the pairing is known and the
-  winner follows from side + score.
+  **capture the two entrants at set start** (the sender's
+  `/matchlogger/current` heartbeat triggers the broker's `/startgg/station`
+  lookup), so by set end the pairing is known and the winner follows from
+  side + score.
 
 **Rule: notify + one-click confirm; never silently guess.** The ingest ping
 always fires; an actual bracket write happens only when the operator confirms,
@@ -203,32 +244,48 @@ is worse than not reporting, so the system fails toward pinging a human.
 start.gg's `startedAt`/`completedAt` are report/call times (loose). The
 MatchLogger's are frame-accurate. Two low-cost wins:
 
-- **Timing export:** the agent can emit a `sets[]` array in the exact shape
-  the splitter already consumes (`{ startedAt, completedAt, station,
-  fullRoundText, players:[{name, character}] }`) but with MatchLogger
-  timestamps — tighter clips, auto-named by merging start.gg round text with
-  MatchLogger characters.
+- **Timing export:** because the broker already holds every ingested set, it
+  can serve a `sets[]` array in the exact shape the splitter consumes (`{
+  startedAt, completedAt, station, fullRoundText, players:[{name, character}]
+  }`) but with MatchLogger timestamps — tighter clips, auto-named by merging
+  start.gg round text with MatchLogger characters. The splitter just points at
+  a `/matchlogger/sets` endpoint instead of `/startgg/sets`.
 - **Filename station stamp:** putting the station in the OBS recording
-  filename (`Station5_2024-01-15 14-30-00.mkv`) lets the mod, the agent, and
+  filename (`Station5_2024-01-15 14-30-00.mkv`) lets the mod, the sender, and
   the splitter agree on station with no extra config, and the splitter can
   auto-select the station from the filename it already parses.
 
+## Where each piece lives
+
+- **`jugeeya.github.io`** — the web console (sibling to `/vods`, shares
+  `styles.css`), and this design doc's home. This is the natural repo: it
+  already hosts the broker-backed browser tools.
+- **The broker Worker** — the new `/matchlogger/*` and `/startgg/station`
+  endpoints, the aggregation store, and the Discord bot/interactions.
+- **This repo (`training-modpack-metrics/matchlogger/`)** — the mod itself and
+  the headless **station sender**, since they install together on the game PC.
+- Kept here for now as a working draft; the doc should move to
+  `jugeeya.github.io` once a session scoped to that repo can commit it.
+
 ## Phasing
 
-- **Phase 0 — agent skeleton + station.** Local web server, station selector,
-  file watcher, "sets recorded today" table from the per-set files. No network
-  yet. Unblocks everything, zero risk.
-- **Phase 1 — ingest + ping.** `/matchlogger/ingest` → Discord ping on set
-  end. Read-only w.r.t. start.gg.
+- **Phase 0 — sender + console skeleton.** Headless station sender (watch →
+  POST) and a static console page reading a stub `/matchlogger/event`;
+  aggregated "sets today across stations" table. Unblocks everything.
+- **Phase 1 — ingest + Discord notify.** `/matchlogger/ingest` stores sets and
+  posts to Discord on set end. Read-only w.r.t. start.gg.
 - **Phase 2 — live tracking + confirm-report.** `current.json` mod addition +
-  `/startgg/station` pre-binding; enrich the ping and the UI with real names /
-  round; one-click report.
+  `/matchlogger/current` heartbeat + `/startgg/station` pre-binding; real
+  names/round in the console and Discord; one-click report from either surface
+  and the `/report` slash command.
 - **Phase 3 — guarded auto-report + timing export.** Auto-report only on
-  unambiguous identity; MatchLogger→splitter timing export.
+  unambiguous identity; `/matchlogger/sets` timing export for the splitter.
 
 ## Operational notes
 
-- start.gg token and Discord webhook live only in the broker.
-- Bracket writes default to operator confirmation.
+- start.gg token and Discord credentials live only in the broker.
+- Bracket writes default to operator confirmation, on whichever surface.
+- Stations 2..N are headless; a station that isn't running the mod at all can
+  still be reported via the Discord `/report` command.
 - The anti-cheat/offline caveat from the mod README still applies — UE4SS only
   injects when the game runs without Easy Anti-Cheat.
