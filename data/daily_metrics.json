@@ -10768,5 +10768,11 @@
     "num_devices": 694,
     "num_sessions": 3673,
     "num_events": 3674
+  },
+  {
+    "date": "2026-08-01",
+    "num_devices": 674,
+    "num_sessions": 3901,
+    "num_events": 3902
   }
 ]
