@@ -11350,5 +11350,11 @@
     "num_devices": 862,
     "num_sessions": 4025,
     "num_events": 4025
+  },
+  {
+    "date": "2026-11-06",
+    "num_devices": 912,
+    "num_sessions": 4116,
+    "num_events": 4116
   }
 ]
